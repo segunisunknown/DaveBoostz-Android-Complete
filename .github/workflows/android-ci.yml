@@ -1,0 +1,108 @@
+name: DaveBoostz Android CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  android-build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Detect Android Gradle project root
+        id: detect
+        shell: bash
+        run: |
+          ANDROID_ROOT=""
+          if [ -f "android-app/settings.gradle.kts" ] && [ -f "android-app/app/build.gradle.kts" ]; then
+            ANDROID_ROOT="android-app"
+          elif [ -f "settings.gradle.kts" ] && [ -f "app/build.gradle.kts" ]; then
+            ANDROID_ROOT="."
+          else
+            FOUND=$(find . -maxdepth 4 -not -path './.git/*' \( -name "settings.gradle.kts" -o -name "settings.gradle" \) | sort | while read -r candidate; do
+              dir=$(dirname "$candidate")
+              if [ -f "$dir/app/build.gradle.kts" ] || [ -f "$dir/app/build.gradle" ]; then
+                echo "${dir#./}"
+                break
+              fi
+            done)
+            ANDROID_ROOT="${FOUND:-}"
+          fi
+
+          if [ -z "$ANDROID_ROOT" ]; then
+            echo "::error::Could not locate an Android Gradle project (settings.gradle.kts + app/build.gradle.kts)."
+            echo "Repository directory structure (depth 3):"
+            find . -maxdepth 3 -not -path './.git/*' | sort
+            exit 1
+          fi
+
+          echo "Detected Android project root: $ANDROID_ROOT"
+          echo "root=$ANDROID_ROOT" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK Platform 34 and Build-Tools 34.0.0
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Set up Gradle 8.7
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Run Android unit tests
+        working-directory: ${{ steps.detect.outputs.root }}
+        env:
+          ORG_GRADLE_PROJECT_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          ORG_GRADLE_PROJECT_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Build Debug APK
+        working-directory: ${{ steps.detect.outputs.root }}
+        env:
+          ORG_GRADLE_PROJECT_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          ORG_GRADLE_PROJECT_SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Print debug SHA-1 signing fingerprint
+        working-directory: ${{ steps.detect.outputs.root }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPORT=$(gradle :app:signingReport --no-daemon)
+          echo "$REPORT" | awk '
+            /^Variant: debug$/ { show=1 }
+            /^Variant: / && $0 != "Variant: debug" { show=0 }
+            show && /^(Variant:|Config:|SHA1:|SHA-256:|Valid until:)/ { print }
+          '
+
+      - name: Upload Debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: daveboostz-debug-apk
+          path: ${{ steps.detect.outputs.root }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload unit test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daveboostz-unit-test-results
+          path: ${{ steps.detect.outputs.root }}/app/build/test-results/testDebugUnitTest/
+          if-no-files-found: ignore
+          retention-days: 7

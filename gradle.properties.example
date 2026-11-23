@@ -1,0 +1,4 @@
+# Copy values into gradle.properties (uncommitted) or pass via environment / CI secrets.
+# NEVER commit private keys or Supabase service_role secrets; Android uses ONLY the public anon key.
+SUPABASE_URL=https://YOUR_PROJECT_REF.supabase.co
+SUPABASE_ANON_KEY=
