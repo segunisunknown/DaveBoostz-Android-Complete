@@ -51,7 +51,9 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+  uses: android-actions/setup-android@v3
+  with:
+    packages: ''
 
       - name: Install Android SDK Platform 34 and Build-Tools 34.0.0
         shell: bash
